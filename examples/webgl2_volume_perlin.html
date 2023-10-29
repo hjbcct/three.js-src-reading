@@ -9,7 +9,7 @@
 
 	<body>
 		<div id="info">
-			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> webgl2 - volume
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> webgl2 - volume test
 		</div>
 
 		<script type="importmap">
@@ -56,6 +56,7 @@
 				new OrbitControls( camera, renderer.domElement );
 
 				// Texture
+				// 创建一个128x128x128的数据数组，并使用Perlin噪声生成每个像素的值
 
 				const size = 128;
 				const data = new Uint8Array( size * size * size );
@@ -82,6 +83,8 @@
 
 				}
 
+				// 创建一个Data3DTexture纹理对象，并将数据数组传递给它
+
 				const texture = new THREE.Data3DTexture( data, size, size, size );
 				texture.format = THREE.RedFormat;
 				texture.minFilter = THREE.LinearFilter;
@@ -90,7 +93,8 @@
 				texture.needsUpdate = true;
 
 				// Material
-
+				// 自定义顶点着色器
+				// 模拟 Volume Rendering 中的射线追踪过程中，计算光线的起点和方向，以便后续的片段着色器能够沿光线进行采样体积数据
 				const vertexShader = /* glsl */`
 					in vec3 position;
 
@@ -108,27 +112,33 @@
 						vOrigin = vec3( inverse( modelMatrix ) * vec4( cameraPos, 1.0 ) ).xyz;
 						vDirection = position - vOrigin;
 
-						gl_Position = projectionMatrix * mvPosition;
+						gl_Position = projectionMatrix * mvPosition;	//	计算最终的顶点位置，将其传递给下一阶段的渲染
 					}
 				`;
 
+				// 自定义片段着色器
+				// 实际执行射线追踪，通过在体积数据中采样，计算射线与体积交互后的颜色值，从而呈现体积渲染效果
 				const fragmentShader = /* glsl */`
 					precision highp float;
 					precision highp sampler3D;
 
+					// 以下uniform为内置变量
 					uniform mat4 modelViewMatrix;
 					uniform mat4 projectionMatrix;
+					// --------------------------------
 
 					in vec3 vOrigin;
 					in vec3 vDirection;
 
 					out vec4 color;
 
-					uniform sampler3D map;
-
+					// 以下uniform均有外部传入
+					uniform sampler3D map;	//	map中包括像素数据
 					uniform float threshold;
 					uniform float steps;
+					// --------------------------------
 
+					// 用于计算射线与一个立方体包围框的相交点
 					vec2 hitBox( vec3 orig, vec3 dir ) {
 						const vec3 box_min = vec3( - 0.5 );
 						const vec3 box_max = vec3( 0.5 );
@@ -142,12 +152,16 @@
 						return vec2( t0, t1 );
 					}
 
+					// 从3D纹理中采样像素数据
+					// 从3D纹理 map 中采样指定位置 p 处的像素数据
+					// *实现了材质到几何的映射
 					float sample1( vec3 p ) {
-						return texture( map, p ).r;
+						return texture( map, p ).r;	//	r 表示红色通道值
 					}
 
 					#define epsilon .0001
 
+					// 计算表面法线
 					vec3 normal( vec3 coord ) {
 						if ( coord.x < epsilon ) return vec3( 1.0, 0.0, 0.0 );
 						if ( coord.y < epsilon ) return vec3( 0.0, 1.0, 0.0 );
@@ -167,27 +181,25 @@
 					void main(){
 
 						vec3 rayDir = normalize( vDirection );
-						vec2 bounds = hitBox( vOrigin, rayDir );
+						vec2 bounds = hitBox( vOrigin, rayDir );	//	确定射线与包围体积数据的立方体相交的区域
 
-						if ( bounds.x > bounds.y ) discard;
+						if ( bounds.x > bounds.y ) discard;	//	起始位置 bounds.x 大于结束位置 bounds.y，说明射线未与体积数据相交
 
 						bounds.x = max( bounds.x, 0.0 );
 
 						vec3 p = vOrigin + bounds.x * rayDir;
-						vec3 inc = 1.0 / abs( rayDir );
+						vec3 inc = 1.0 / abs( rayDir );	//	射线方向向量 rayDir 的绝对值的倒数
 						float delta = min( inc.x, min( inc.y, inc.z ) );
-						delta /= steps;
+						delta /= steps;		//	steps越大, delta越小
 
 						for ( float t = bounds.x; t < bounds.y; t += delta ) {
 
 							float d = sample1( p + 0.5 );
 
 							if ( d > threshold ) {
-
-								color.rgb = normal( p + 0.5 ) * 0.5 + ( p * 1.5 + 0.25 );
-								color.a = 1.;
+								color.rgb = normal( p + 0.5 ) * 0.5 + ( p * 1.5 + 0.25 );	//	根据采样位置 p 计算颜色
+								color.a = 1.;	//	设置不透明度为1
 								break;
-
 							}
 
 							p += rayDir * delta;
@@ -199,8 +211,10 @@
 					}
 				`;
 
-				const geometry = new THREE.BoxGeometry( 1, 1, 1 );
-				const material = new THREE.RawShaderMaterial( {
+				// 创建一个立方体几何体，并将自定义着色器材质应用于它
+
+				const geometry = new THREE.BoxGeometry( 1, 1, 1 );	//	立方体几何体
+				const material = new THREE.RawShaderMaterial( {		//	自定义着色器材质	128*128*128
 					glslVersion: THREE.GLSL3,
 					uniforms: {
 						map: { value: texture },
@@ -208,15 +222,13 @@
 						threshold: { value: 0.6 },
 						steps: { value: 200 }
 					},
-					vertexShader,
-					fragmentShader,
-					side: THREE.BackSide,
+					vertexShader,	//	顶点着色器
+					fragmentShader,	//	片段着色器
+					side: THREE.BackSide,	//	只渲染背面
 				} );
 
-				mesh = new THREE.Mesh( geometry, material );
-				scene.add( mesh );
-
-				//
+				mesh = new THREE.Mesh( geometry, material );	//	网络（Mesh）对象
+				scene.add( mesh );	//	将网络对象加入场景
 
 				const parameters = { threshold: 0.6, steps: 200 };
 
@@ -227,6 +239,7 @@
 
 				}
 
+				// 创建GUI，用于控制Threshold
 				const gui = new GUI();
 				gui.add( parameters, 'threshold', 0, 1, 0.01 ).onChange( update );
 				gui.add( parameters, 'steps', 0, 300, 1 ).onChange( update );
